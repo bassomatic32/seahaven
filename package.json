@@ -1,0 +1,13 @@
+{
+  "name": "Seahaven",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "node": ">=12"
+  },
+  "dependencies": {
+    "delay": "^4.3.0",
+    "terminal-kit": "^3.0.1",
+    "underscore": "^1.13.6"
+  }
+}
