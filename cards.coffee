@@ -13,6 +13,9 @@ do ->
 		played: 0
 		winnable: 0
 
+	boards = {}
+	cycleCardsStack = 0
+
 
 
 	suitNames =
@@ -102,6 +105,8 @@ do ->
 		term.defaultColor()
 		term.moveTo(50,2,"Games Played #{gameTally.played}")
 		term.moveTo(50,4,"Winnable Games #{gameTally.winnable}")
+		term.moveTo(50,6,"Total Configurations: #{_.keys(boards).length}")
+		term.moveTo(50,8,"Stack Size: #{cycleCardsStack}")
 		
 		
 			
@@ -109,7 +114,6 @@ do ->
 
 
 
-	boards = {}
 
 	# lay the deck out on the board
 	initializeGame = () ->
@@ -168,7 +172,6 @@ do ->
 	# target type is 'goal', 'cell', or 'stack'
 	isLegalMove = (card,target,targetType) ->
 
-		# console.log card,target,targetType
 
 		if targetType is 'goal'
 			return true if target.length is 0 and card.value is 1 # ace on blank target
@@ -181,8 +184,6 @@ do ->
 		if targetType is 'stack'
 			return true if target.length is 0 and card.value is 13 # king on blank target
 			return false if target.length is 0 and card.value isnt 13 # can't move anything but king on empty stack
-	#		console.log target
-	#		console.log card
 			return true if _.last(target).suit is card.suit and _.last(target).value is (card.value+1) and notBlockingMove(card,target)# same suit on next value
 
 		return false
@@ -192,7 +193,6 @@ do ->
 	findLegalMoves = (source,sourceType,board) ->
 
 
-		# console.log 'Find Legal Moves',sourceType
 		moves = []
 
 		card = _.last source # source is a stack, so this gets the top of the stack
@@ -248,15 +248,23 @@ do ->
 		return false
 
 
-	# create a unique checksum for the boards current state.  Done do the goals because you can't change the goal stacks without changing the other 2
+	# create a unique checksum for the boards current state. This is used to ensure we never repeat a configuration, as its
+	# easy in this game to achieve the same configuration from multiple move possibilities
+	# Goal configuration is not considered
+	# Cells are sorted to ensure that any order of the same cards in the cells are considered to be the same configuration
 	checksumBoard = (board) ->
 		cells = _.chain(board.cells)
 		.map (c) -> if c[0]? then c[0].suit * 100 + c[0].value else 0
 		.sortBy()
 		.value()
 
+		# Sort the stacks by the first card.  The order of the stacks doesn't matter, only what's in them.  By sorting them, we'll ensure that any original order is considered to be the same
+		stacks = _.sortBy board.stacks,(s) ->
+			return s[0].suit * 100 + s[0].value if s[0]? 
+			return 0
+
 		str = JSON.stringify
-			s: board.stacks
+			s: stacks
 			c: cells
 
 
@@ -275,11 +283,8 @@ do ->
 
 		if not f? and len % 1000 is 0
 			len = _.keys(boards).length
-			console.log("Boards Size: #{len}") 
-			
 		
 
-		# process.stdout.write 'O' if f?
 		return true if f?
 		return false
 
@@ -307,27 +312,17 @@ do ->
 			repeat = addBoard(board)
 
 			unless repeat # don't continue unless move wasn't a repeat ( classic example of too many negatives:  continue if not repeated)
-				# console.log "Move Forward"
-				# process.stdout.write '+'
-				# printBoard(board)
 				success = cycleThroughCards board
 				return true if success
 
-
-			# removeBoard(board)
 			moveCard board,legalMoves[moveIndex].target,source   # put the card back
-
-			# log.default.warn "Move BACK!"
-			# process.stdout.write '-'
-			# printBoard(board)
-
 
 
 
 		return false
 
 
-	cycleCardsStack = 0
+	
 
 	cycleThroughCards = (board) ->
 
@@ -353,10 +348,7 @@ do ->
 		legalMoves = undefined
 		s = undefined
 		for i in [0..13]
-			# console.log "legal move search"
-			# console.log i
 			s = source(i)
-			# console.log s
 			legalMoves = findLegalMoves s.stack,s.sourceType,board
 			break if legalMoves?[0]?.targetType is 'goal'
 			s = undefined
@@ -366,11 +358,7 @@ do ->
 
 		else
 
-			# console.log 'No Legal Moves'
-
-		#	process.stdout.write('+'+cycleCardsStack)
 			while cardIndex < 14
-		#		process.stdout.write("-#{cycleCardsStack}-#{cardIndex}--")
 
 				s = source(cardIndex)
 				legalMoves = findLegalMoves s.stack,s.sourceType, board
@@ -393,10 +381,6 @@ do ->
 
 
 		success = cycleThroughCards(board,0)
-
-		console.log "Success" if success
-		console.log "Failure" if not success
-
 
 		return success
 
