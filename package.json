@@ -5,7 +5,11 @@
   "engines": {
     "node": ">=12"
   },
+  "scripts": {
+	"start": "coffee cards.coffee"
+  },
   "dependencies": {
+    "coffeescript": "^2.7.0",
     "delay": "^4.3.0",
     "terminal-kit": "^3.0.1",
     "underscore": "^1.13.6"
