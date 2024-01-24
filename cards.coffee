@@ -1,7 +1,39 @@
+###
+Seahaven Towers Solver
+
+( https://en.wikipedia.org/wiki/Seahaven_Towers )
+
+In short:  Goal is to build up goal stacks from Ace to King in same suit
+	- There are 4 goal stacks, one for each suit.  Goals stacks start empty, and must be filled in order from Ace to King following the same suit
+	- There are 4 free cells.  Any one card may be moved to a free cell.  Cards in free cells can be moved to goal stacks for tableau stacks as per the rules of those stacks.  Initially, there are 2 free cells occupied by cards
+	- 10 tableu stacks with 5 cards each.  The top-most card on the stack may be moved to a free cell, the goal if possible, or onto another tablue stack where the top-most card is of the same suit and exactly one higher in value. 
+	(e.g. A 5 of Hearts may only be placed on a 6 of hearts)
+	- Only Kings can be placed on empty tablue stacks.
+
+	An ordered set of cards in a tableau stack are ones where the top most cards are ordered with respect to the card directly beneath them.  ( e.g. 5H - 4H - 3H , with 3H being the top most card).  An ordered set may be moved
+	in total to another stack that continues the ordering if there are less-or-equal number of cards in the ordered set than the number of currently free cells + 1.
+	Example, 5H-4H-3H may be moved on top of a 6H by moving the 3H and 4H to free cells, then moving the 5H, then moving the 4H and 3H back to the ordered set.  
+	This also means that the largest ordered set that can be moved at once is 5 cards.
+
+	This solver finds and moves these ordered sets as extents.
+
+	6 cards in an ordered set with a lower valued card in the same suit lower in the stack is a dead-end, as there will be no way to subseuqently extract the lower valued card.  This is a blocking move that is checked and avoided.
+
+	There are many ways to arrive at the same configuration of cards on the boards.  To avoid this while solving, each board configuration's signature is stored in a hash.  Duplicate board detection results in that path for a solution
+	being abandoned. 
+
+###
+
 crypto = require 'crypto'
 _ = require 'underscore'
 term = require( 'terminal-kit' ).terminal
 delay = require 'delay'
+
+
+ABANDON_THRESHOLD  = 200000 # number of unique board configuration for any one game before we give up.  
+# NOTE: for reasons that have been hard to pin down, the current process can result in a very broad possibility tree.  We have several checks
+# to cutoff branches along the depth of a tree, but when the tree is very wide, the number of unique configurations goes towards a million before we
+# determine success or failure.  As this can get very slow, we just abandon these games.
 
 
 do ->
@@ -14,12 +46,17 @@ do ->
 	gameTally =
 		played: 0
 		winnable: 0
+		losers: 0
+		abandoned: 0
 
 	boards = {}
+	totalConfigurations = 0
 	stackConfigurations = {}
 
 	cycleCardsStack = 0
 
+	repeatsAvoided = 0
+	
 
 
 	suitNames =
@@ -33,6 +70,38 @@ do ->
 		suit: 0
 		value: 0
 
+	# lay the deck out on the board
+	initializeGame = () ->
+		deck = createDeck()
+		deck = _.shuffle deck		
+
+		board = createBoard()
+
+
+		for stack in board.stacks
+			for i in [1..5]
+				stack.push deck.pop()
+
+		# that's 50 cards.  Do the remain 2 into the free cells
+		board.cells[1].push deck.pop()
+		board.cells[2].push deck.pop()
+
+
+		boards = {} # saved configurations.  ( Used to check for repeated boards)
+		totalConfigurations = 0 # number of boards saved
+		gameMoves = [] # the array of game moves to the conclusion.  This array will grow or contract depending if we are advancing or retreating on the possibility tree
+		cycleCardsStack = 0 # just a counter to keep track of the depth into the possibility tree
+		totalMoves = 0 # The total number of times we've moded cards
+		repeatsAvoided = 0 # The total number of times we've encountered a repeat board configuration
+		
+	
+		addBoard(board) # record the initial configuration
+		
+
+		return board
+
+
+	# initialize a deck of 52 cards
 	createDeck = ->
 
 		deck = []
@@ -45,14 +114,11 @@ do ->
 		return deck
 
 
-	deck = createDeck()
-
-
 	blankArray = (array) ->
 		for i in [0..array.length-1]
 			array[i] = []
 
-	# create a blank game board
+	# create a blank game board.  The board consist of goal stacks, cell stacks and the tableau stacks.  ( Note: cells stacks will have only zero or one card in them. )
 	createBoard = ->
 		board =
 			goals : blankArray [1..4]
@@ -60,6 +126,7 @@ do ->
 			stacks: blankArray [1..10]
 			
 
+	# For output, the name of the card from its value
 	cardName = (card,placeHolder='   ') ->
 		return placeHolder unless card?
 		v = card.value
@@ -81,10 +148,12 @@ do ->
 		str += ' = '
 		return str
 
+	# nice, pretty, terminal friendly output of the current state of affairs
 	printBoard = (board,title='')  ->
 
-		offsetY = 5
-		term.moveTo(1,1,title)
+		offsetY = 2
+		term.moveTo(1,1).eraseLine()
+		term(title)
 
 		colorize = (card) -> 
 			return unless card?
@@ -119,44 +188,13 @@ do ->
 
 		term.defaultColor()
 		term.moveTo(50,offsetY+2,"Games Played #{gameTally.played}")
-		term.moveTo(50,offsetY+4,"Winnable Games #{gameTally.winnable}")
-		term.moveTo(50,offsetY+6,"Total Configurations: #{_.keys(boards).length}     ")
-		term.moveTo(50,offsetY+8,"Total Stacks: #{_.keys(stackConfigurations).length}     ")
-		term.moveTo(50,offsetY+10,"Stack Size: #{cycleCardsStack}      ")
-		term.moveTo(50,offsetY+12,"Total Moves: #{gameMoves.length}      ")
-		
-		
-			
+		term.moveTo(50,offsetY+4,"Winnable: #{gameTally.winnable}  Losers: #{gameTally.losers}   Abandoned: #{gameTally.abandoned}")
+		term.moveTo(50,offsetY+6,"Call Stack Size: #{cycleCardsStack}      ")
+		term.moveTo(50,offsetY+8,"Total Moves: #{gameMoves.length}      ")
+		term.moveTo(50,offsetY+10,"Total Configurations: #{totalConfigurations}  Repeats Found: #{repeatsAvoided}   ")
 
 
 
-
-
-	# lay the deck out on the board
-	initializeGame = () ->
-		deck = createDeck()
-		deck = _.shuffle deck		
-
-		board = createBoard()
-
-
-		for stack in board.stacks
-			for i in [1..5]
-				stack.push deck.pop()
-
-		# that's 50 cards.  Do the remain 2 into the free cells
-		board.cells[1].push deck.pop()
-		board.cells[2].push deck.pop()
-
-
-		boards = {}
-		gameMoves = []
-		cycleCardsStack = 0
-		totalMoves = 0
-		addBoard(board)
-		
-
-		return board
 
 
 	# you cannot create a sequence of more than 5 consecutive cards if a lower card of the same suit is higher in the stack.
@@ -165,15 +203,15 @@ do ->
 	# we can ensure this doesn't happen and reduce our possiblity tree
 	isBlockingMove = (card,target,extentLength) ->
 		# assume that card is legal to land on target.
-		return false if target.length < 6 # impossible to have a block unless there are at least 6 cards
+		return false if target.length < 5 # impossible to have a block unless there are at least 5 cards ( the 6th card added would be the blocking move)
 
 		foundLower = false
 		count = 1
 
-		stack = [].concat(target).reverse() # reverse the stack for easy iteration ( top of the stack is first in array )
-		currentCard = stack[0]
+		r = [].concat(target).reverse() # reverse the stack for easy iteration ( top of the stack is first in array )
+		currentCard = r[0]
 				
-		for c in stack[1..]
+		for c in r[1..]
 			# current card will be defined as long the card (c) in the iteration is the same suit and one greater in value
 			if currentCard? and c.suit is currentCard.suit and c.value is (currentCard.value+1)
 				currentCard = c # set current card to iteration card
@@ -187,7 +225,7 @@ do ->
 				foundLower = true
 				break
 		
-		return true if foundLower and (count+extentLength) >= 6
+		return true if foundLower and (count+extentLength) >= 5
 		return false
 
 	# returns how many cards on the top of the stack are ordered ( inclusive ).  That is, there will always be at least one, unless the stack is empty
@@ -199,6 +237,22 @@ do ->
 			break unless r[i-1].suit is r[i].suit and r[i-1].value is r[i].value-1
 			count++
 		return count
+
+	isDisconnectedStack = (stack) ->
+		return flase if stack.length <= 1
+		r = [].concat(stack).reverse()
+		breakPoint = false
+		isDisconnected = false
+		suit = r[0].suit
+		for i in [1...r.length]
+			if suit is r[i].suit 
+				continue unless breakPoint
+				isDisconnected = true
+			breakPoint = true
+			
+
+		return isDisconnected
+
 
 
 	# Check to see if the stack is fully ordered
@@ -359,7 +413,7 @@ do ->
 		c = source.pop()
 		target.push c
 			
-		printBoard(board)  if totalMoves % 1000 is 0
+		printBoard(board,"Moving #{msg}")  if totalMoves % 5000 is 0
 
 	undoLastMove = (board) ->
 		move = gameMoves.pop()
@@ -413,10 +467,18 @@ do ->
 		chksum = checksumBoard(board)
 		f = boards[chksum]
 
-		boards[chksum] = true unless f?
+		unless f?
+			boards[chksum] = true 
+			totalConfigurations++
 
+		repeatsAvoided++ if f?
+	
 		return true if f?
+		if totalConfigurations > ABANDON_THRESHOLD # give up after a certain point
+			board.abandoned = true
+			return true
 		return false
+
 
 	checksumStack = (stack) ->
 		str = JSON.stringify stack
@@ -439,16 +501,17 @@ do ->
 				moveCard(board,source.stack,source.sourceType, lm.target,lm.targetType) # actually move the card
 			return true if isSuccess(board) # check for success
 
-
+			
 			repeatBoard = addBoard(board)
 			
 
-			unless repeatBoard # don't continue unless move wasn't a repeat ( classic example of too many negatives:  continue if not repeated)
-				success = cycleThroughCards board
+			unless repeatBoard  # don't continue unless move wasn't a repeat ( classic example of too many negatives:  continue if not repeated)
+				success = cycleThroughCards(board) # recursively attempt to solve the new board configuration
 				return true if success
 
+			
 			if extent > 0
-				totalExtentMoves = (extent-1)*2 + 1
+				totalExtentMoves = (extent-1)*2 + 1  # each extent move is recorded as individual moves, so we need to back them all out individually
 				undoLastMove(board) for i in [1..totalExtentMoves]
 			else
 				undoLastMove(board)
@@ -495,9 +558,11 @@ do ->
 		allStacks = _.chain allStacks
 			.filter (s) -> s.legalMoves.length > 0
 			.sortBy allStacks,(s) ->
-				return 0 if s.legalMoves[0]?.targetType is 'goal'
-				return 1 if s.legalMoves[0]?.targetType is 'stack'
-				return _.last(s.source.stack).value 
+				return 0 if s.legalMoves[0].targetType is 'goal'
+				if s.legalMoves[0].targetType is 'stack'
+					return 10000 if isDisconnectedStack(s.legalMoves[0].target)
+				return s.legalMoves[0].target.length
+				
 			.value()
 		
 		for s in allStacks
@@ -523,9 +588,10 @@ do ->
 			count++
 			moveCard(board,move.source,move.sourceType,move.target,move.targetType)
 			unless move.extent
-				printBoard(board,"Replay move #{count}") 
+				printBoard(board,move.msg) 
 				await delay(100)
 
+		# Output all the moves made
 		# for move in moveCopy
 			# console.log move.msg
 
@@ -549,13 +615,14 @@ do ->
 		success = playGame(board)
 		gameTally.played++
 		gameTally.winnable++ if success
-		
+		gameTally.losers++ unless success or board.abandoned
+		gameTally.abandoned++ if board.abandoned
 		# await replayGame(board) if success
 			
 
 
 	
-	# term.clear()
+	term.clear()
 	console.log gameTally
 
 	console.log 'done'
